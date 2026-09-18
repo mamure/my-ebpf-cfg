@@ -13,6 +13,21 @@ build-type:         Simple
 common warnings
     ghc-options: -Wall
 
+library
+    import: warnings
+    hs-source-dirs: src
+    exposed-modules:
+        CFG
+        Interval
+        AbsState
+        Transfer
+        Analysis
+    build-depends:
+        base >= 4.14 && < 5,
+        array,
+        containers,
+        ebpf-tools == 0.2.0.0
+
 executable ebpf-cfg
     -- Import common warning flags.
     import:           warnings
@@ -26,8 +41,8 @@ executable ebpf-cfg
     -- Other library packages from which modules are imported.
     build-depends:    base >= 4.14 && < 5,
                       containers,
-                      ebpf-tools == 0.2.0.0,
-                      text-display
+                      ebpf-cfg,
+                      ebpf-tools == 0.2.0.0
 
     -- Directories containing source files.
     hs-source-dirs:   app
