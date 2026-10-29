@@ -5,6 +5,7 @@ import AbsState
 import Analysis
 import CFG
 import Ebpf.AsmParser
+import Ebpf.Asm
 import InformationFlow
 import Data.Array ((//))
 import System.Environment
@@ -51,6 +52,11 @@ main = do
                       resultStates = analyzeIF initial program (cfg program)
 
                   mapM_ printIFState (Map.toAscList resultStates)
+                  mapM_ (printExitSecurity resultStates)
+                    [ label
+                    | (label, instruction) <- zip [0..] program
+                    , instruction == Exit
+                    ]
 
     _ ->
       do
@@ -83,3 +89,13 @@ printIFState (label, state) = do
       putStrLn $
         "  r" ++ show register ++ " = " ++
         show (readRegLevel register security)
+
+printExitSecurity :: Map.Map Int IFState -> Int -> IO ()
+printExitSecurity states label =
+  case Map.lookup label states of
+    Nothing ->
+      putStrLn ("Exit at label " ++ show label ++ ": unreachable")
+    Just state ->
+      putStrLn $
+        "Exit at label " ++ show label ++ ": " ++
+        if exitSecure state then "secure" else "SECURITY VIOLATION"

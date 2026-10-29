@@ -5,6 +5,7 @@ module InformationFlow
   , lowSecState
   , highSecState
   , analyzeIF
+  , exitSecure
   , readRegLevel
   , readMemLevel
   ) where
@@ -81,6 +82,15 @@ joinIF :: IFState -> IFState -> IFState
 joinIF left right = IFState
   { valueState = joinState (valueState left) (valueState right)
   , secState = joinSec (secState left) (secState right)
+  }
+
+widenSec :: SecState -> SecState -> SecState
+widenSec = joinSec
+
+widenIF :: IFState -> IFState -> IFState
+widenIF left right = IFState
+  { valueState = widenState (valueState left) (valueState right)
+  , secState = widenSec (secState left) (secState right)
   }
 
 bottomIF :: IFState
@@ -269,11 +279,23 @@ branchGuardLevel (Assert _ register operand) state =
     (operandLevel operand state)
 branchGuardLevel _ _ = Low
 
+-- The observable eBPF result is r0.  Requiring a low pc as well makes
+-- termination/control dependence explicit at an exit point.
+exitSecure :: IFState -> Bool
+exitSecure state =
+  readRegLevel 0 (secState state) == Low
+  && pcLevel (secState state) == Low
+
 analyzeIF :: SecState -> Program -> CFG -> Map Label IFState
-analyzeIF initial program graph = loop initialStates [0]
+analyzeIF initial program graph = loop initialStates [0] Map.empty
   where
     regions = controlRegions program graph
     successors = succsOf graph
+    wideningLabels = Set.fromList
+      [ target
+      | (source, _, target) <- Set.toList graph
+      , target <= source
+      ]
     guards = Map.fromListWith (++)
       [ (source, [transition])
       | (source, transition@(Assert _ _ _), _) <- Set.toList graph
@@ -283,22 +305,28 @@ analyzeIF initial program graph = loop initialStates [0]
     initialStates = Map.insert 0
       (IFState topState initial)
       (Map.fromSet (const bottomIF) labels)
-    loop states [] = states
-    loop states (label:queue) =
+    loop states [] _ = states
+    loop states (label:queue) counts =
       let oldState = Map.findWithDefault bottomIF label states
-          (states', queue') = foldl' (propagate label oldState)
-            (states, queue) (Map.findWithDefault [] label successors)
-      in loop states' queue'
-    propagate source sourceState (states, queue) (transition, target) =
+          (states', queue', counts') = foldl' (propagate label oldState)
+            (states, queue, counts) (Map.findWithDefault [] label successors)
+      in loop states' queue' counts'
+    propagate source sourceState (states, queue, counts) (transition, target) =
       let context = executionContext transition target states source sourceState
           targetContext = contextAt target states source sourceState
           incoming =
             setPc targetContext (stepIF context transition sourceState)
           oldTarget = Map.findWithDefault bottomIF target states
-          updated = joinIF oldTarget incoming
+          count = Map.findWithDefault 0 target counts
+          updated
+            | target `Set.member` wideningLabels && count >= 2 =
+                widenIF oldTarget incoming
+            | otherwise =
+                joinIF oldTarget incoming
+          nextCounts = Map.insert target (count + 1) counts
       in if updated == oldTarget
-         then (states, queue)
-         else (Map.insert target updated states, queue ++ [target])
+         then (states, queue, nextCounts)
+         else (Map.insert target updated states, queue ++ [target], nextCounts)
     executionContext transition target states source sourceState =
       case transition of
         Assert _ _ _ -> contextAt target states source sourceState
